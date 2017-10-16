@@ -469,3 +469,6 @@
 42  return Status::ok();
 43}
 ```
+
+http://androidxref.com/8.0.0_r4/xref/frameworks/opt/net/wifi/libwifi_system/supplicant_manager.cpp#128http://androidxref.com/8.0.0_r4/xref/frameworks/opt/net/wifi/service/java/com/android/server/wifi/WifiNative.java#mWificondControl
+http://androidxref.com/8.0.0_r4/xref/frameworks/opt/net/wifi/service/java/com/android/server/wifi/WifiStateMachine.java
