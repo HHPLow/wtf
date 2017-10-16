@@ -90,7 +90,7 @@
 4013            logStateAndMessage(message, this);
 4014            switch (message.what) {
 4015                case CMD_START_SUPPLICANT: // jump here
-4016                    mClientInterface = mWifiNative.setupForClientMode(); // 3a1-->3a2 获取scanner & 设置
+4016                    mClientInterface = mWifiNative.setupForClientMode(); // 3a1-->3a2 open hw 获取scanner & 设置
 4017                    if (mClientInterface == null
 4018                            || !mDeathRecipient.linkToDeath(mClientInterface.asBinder())) {
 4019                        setWifiState(WifiManager.WIFI_STATE_UNKNOWN);
@@ -119,7 +119,7 @@
 4042                        loge("Unable to change interface settings: " + ie);
 4043                    }
 4044
-4045                    if (!mWifiNative.enableSupplicant()) {
+4045                    if (!mWifiNative.enableSupplicant()) { // / 3b1-->3b2???
 4046                        loge("Failed to start supplicant!");
 4047                        setWifiState(WifiManager.WIFI_STATE_UNKNOWN);
 4048                        cleanup();
@@ -172,10 +172,7 @@
 
 3a.2. startHalIfNecessary
 ```java
-// 
-
-
-/frameworks/opt/net/wifi/service/java/com/android/server/wifi/WifiNative.java
+// /frameworks/opt/net/wifi/service/java/com/android/server/wifi/WifiNative.java
 820    /**
 821     * Bring up the Vendor HAL and configure for STA mode or AP mode, if vendor HAL is supported.
 822     *
@@ -190,6 +187,114 @@
 831        return mWifiVendorHal.startVendorHal(isStaMode);
 832    }
 833
+```
+
+3a.2.1  startVendorHal
+```java
+// /frameworks/opt/net/wifi/service/java/com/android/server/wifi/WifiVendorHal.java
+292    public boolean startVendorHal(boolean isStaMode) {
+293        synchronized (sLock) {
+294            if (mIWifiStaIface != null) return boolResult(false);
+295            if (mIWifiApIface != null) return boolResult(false);
+296            if (!mHalDeviceManager.start()) {
+/*
+// /frameworks/opt/net/wifi/service/java/com/android/server/wifi/HalDeviceManager.java
+	137    /**
+	138     * Attempts to start Wi-Fi (using HIDL). Returns the success (true) or failure (false) or
+	139     * the start operation. Will also dispatch any registered ManagerStatusCallback.onStart() on
+	140     * success.
+	141     *
+	142     * Note: direct call to HIDL.
+	143     */
+	144    public boolean start() {
+	145        return startWifi();
+	146    }
+	147
+	
+	1088    private boolean startWifi() {
+	1089        if (DBG) Log.d(TAG, "startWifi");
+	1090
+	1091        synchronized (mLock) {
+	1092            try {
+	1093                if (mWifi == null) {
+	1094                    Log.w(TAG, "startWifi called but mWifi is null!?");
+	1095                    return false;
+	1096                } else {
+	1097                    int triedCount = 0;
+	1098                    while (triedCount <= START_HAL_RETRY_TIMES) {
+	1099                        WifiStatus status = mWifi.start(); ////important!!!
+	1100                        if (status.code == WifiStatusCode.SUCCESS) {
+	1101                            initIWifiChipDebugListeners();
+	1102                            managerStatusListenerDispatch();
+	1103                            if (triedCount != 0) {
+	1104                                Log.d(TAG, "start IWifi succeeded after trying "
+	1105                                         + triedCount + " times");
+	1106                            }
+	1107                            return true;
+	1108                        } else if (status.code == WifiStatusCode.ERROR_NOT_AVAILABLE) {
+	1109                            // Should retry. Hal might still be stopping.
+	1110                            Log.e(TAG, "Cannot start IWifi: " + statusString(status)
+	1111                                    + ", Retrying...");
+	1112                            try {
+	1113                                Thread.sleep(START_HAL_RETRY_INTERVAL_MS);
+	1114                            } catch (InterruptedException ignore) {
+	1115                                // no-op
+	1116                            }
+	1117                            triedCount++;
+	1118                        } else {
+	1119                            // Should not retry on other failures.
+	1120                            Log.e(TAG, "Cannot start IWifi: " + statusString(status));
+	1121                            return false;
+	1122                        }
+	1123                    }
+	1124                    Log.e(TAG, "Cannot start IWifi after trying " + triedCount + " times");
+	1125                    return false;
+	1126                }
+	1127            } catch (RemoteException e) {
+	1128                Log.e(TAG, "startWifi exception: " + e);
+	1129                return false;
+	1130            }
+	1131        }
+	1132    }
+*/
+297                return startFailedTo("start the vendor HAL");
+298            }
+299            IWifiIface iface;
+300            if (isStaMode) {
+301                mIWifiStaIface = mHalDeviceManager.createStaIface(null, null);
+302                if (mIWifiStaIface == null) {
+303                    return startFailedTo("create STA Iface");
+304                }
+305                iface = (IWifiIface) mIWifiStaIface;
+306                if (!registerStaIfaceCallback()) {
+307                    return startFailedTo("register sta iface callback");
+308                }
+309                mIWifiRttController = mHalDeviceManager.createRttController(iface);
+310                if (mIWifiRttController == null) {
+311                    return startFailedTo("create RTT controller");
+312                }
+313                if (!registerRttEventCallback()) {
+314                    return startFailedTo("register RTT iface callback");
+315                }
+316                enableLinkLayerStats();
+317            } else {
+318                mIWifiApIface = mHalDeviceManager.createApIface(null, null);
+319                if (mIWifiApIface == null) {
+320                    return startFailedTo("create AP Iface");
+321                }
+322                iface = (IWifiIface) mIWifiApIface;
+323            }
+324            mIWifiChip = mHalDeviceManager.getChip(iface);
+325            if (mIWifiChip == null) {
+326                return startFailedTo("get the chip created for the Iface");
+327            }
+328            if (!registerChipCallback()) {
+329                return startFailedTo("register chip callback");
+330            }
+331            mLog.i("Vendor Hal started successfully");
+332            return true;
+333        }
+334    }
 ```
 
 3a.3. setupDriverForClientMode 
@@ -276,4 +381,91 @@
 152        return clientInterface;
 153    }
 154
+```
+
+
+3b1. enableSupplicant
+```cpp
+// /system/connectivity/wificond/client_interface_binder.cpp
+40Status ClientInterfaceBinder::enableSupplicant(bool* success) {
+41  *success = impl_ && impl_->EnableSupplicant();
+	/*
+		171bool ClientInterfaceImpl::EnableSupplicant() {
+		172  return supplicant_manager_->StartSupplicant();
+		/*
+		/frameworks/opt/net/wifi/libwifi_system/supplicant_manager.cpp
+			128 bool SupplicantManager::StartSupplicant() {
+			129  char supp_status[PROPERTY_VALUE_MAX] = {'\0'};
+			130  int count = 200; /* wait at most 20 seconds for completion */
+			131  const prop_info* pi;
+			132  unsigned serial = 0;
+			133
+			134  /* Check whether already running */
+			135  if (property_get(kSupplicantInitProperty, supp_status, NULL) &&
+			136      strcmp(supp_status, "running") == 0) {
+			137    return true;
+			138  }
+			139
+			140  /* Before starting the daemon, make sure its config file exists */
+			141  if (ensure_config_file_exists(kSupplicantConfigFile) < 0) {
+			142    LOG(ERROR) << "Wi-Fi will not be enabled";
+			143    return false;
+			144  }
+			145
+			146  /*
+			147   * Some devices have another configuration file for the p2p interface.
+			148   * However, not all devices have this, and we'll let it slide if it
+			149   * is missing.  For devices that do expect this file to exist,
+			150   * supplicant will refuse to start and emit a good error message.
+			151   * No need to check for it here.
+			152   */
+			153  (void)ensure_config_file_exists(kP2pConfigFile);
+			154
+			155  if (!EnsureEntropyFileExists()) {
+			156    LOG(ERROR) << "Wi-Fi entropy file was not created";
+			157  }
+			158
+			159  /*
+			160   * Get a reference to the status property, so we can distinguish
+			161   * the case where it goes stopped => running => stopped (i.e.,
+			162   * it start up, but fails right away) from the case in which
+			163   * it starts in the stopped state and never manages to start
+			164   * running at all.
+			165   */
+			166  pi = __system_property_find(kSupplicantInitProperty);
+			167  if (pi != NULL) {
+			168    serial = __system_property_serial(pi);
+			169  }
+			170
+			171  property_set("ctl.start", kSupplicantServiceName);
+			172  sched_yield();
+			173
+			174  while (count-- > 0) {
+			175    if (pi == NULL) {
+			176      pi = __system_property_find(kSupplicantInitProperty);
+			177    }
+			178    if (pi != NULL) {
+			179      /*
+			180       * property serial updated means that init process is scheduled
+			181       * after we sched_yield, further property status checking is based on this
+			182       */
+			183      if (__system_property_serial(pi) != serial) {
+			184        __system_property_read(pi, NULL, supp_status);
+			185        if (strcmp(supp_status, "running") == 0) {
+			186          return true;
+			187        } else if (strcmp(supp_status, "stopped") == 0) {
+			188          return false;
+			189        }
+			190      }
+			191    }
+			192    usleep(100000);
+			193  }
+			194  return false;
+			195}
+		*/
+		173}
+	*/
+	
+42  return Status::ok();
+43}
 ```
