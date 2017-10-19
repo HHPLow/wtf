@@ -9,7 +9,7 @@ wpa_supplicant 是跨平台的 WPA 请求者程序（supplicant），支持 WEP�
 ### 介绍
 1. WIFI的daemon wpa_supplicant
 2. 实现在 /external/wpa_suplicant
-3. wpa_supplicant适配层是通用的wpa_supplicant的封装，在Android中作为WIFI部分的硬件抽象层(HAL)来使用。wpa_supplicant适配层主要用于封装与wpa_supplicant守护进程的通信，以提供给Android框架使用。它实现了加载，控制和消息监控等功能。 
+3. wpa_supplicant适配层是通用的wpa_supplicant的封装，在Android中作为WIFI部分的硬件抽象层(HAL)来使用。wpa_supplicant适配层主要用于封装与wpa_supplicant守护进程的通信，以提供给Android框架使用。它实现了加载，控制和消息监控等功能。
 4. wpa_supplicant适配层的头文件
 > /hardware/libhardware_legacy/include/hardware_legacy/wifi.h
 
@@ -105,7 +105,75 @@ disable_scan_offload=1
 p2p_disabled=1
 ```
 
-模块定义`/hardware/libhardware_legacy/wifi/wifi.c`
+2. 模块定义和加载`/hardware/libhardware_legacy/wifi/wifi.c` ====> wifi_load_driver() /system/lib/modules/wlan.ko
+
+```c
+int wifi_load_driver()
+{
+#ifdef WIFI_DRIVER_MODULE_PATH
+    char driver_status[PROPERTY_VALUE_MAX];
+    int count = 100; /* wait at most 20 seconds for completion */
+
+    if (is_wifi_driver_loaded()) {
+        return 0;
+    }
+
+    if (insmod(DRIVER_MODULE_PATH, DRIVER_MODULE_ARG) < 0)
+        return -1;
+
+    if (strcmp(FIRMWARE_LOADER,"") == 0) {
+        /* usleep(WIFI_DRIVER_LOADER_DELAY); */
+        property_set(DRIVER_PROP_NAME, "ok"); //set ok wifi loaded
+    }
+    else {
+        property_set("ctl.start", FIRMWARE_LOADER);
+    }
+    sched_yield();
+    while (count-- > 0) {
+        if (property_get(DRIVER_PROP_NAME, driver_status, NULL)) {
+            if (strcmp(driver_status, "ok") == 0)
+                return wifi_fst_load_driver();
+            else if (strcmp(driver_status, "failed") == 0) {
+                wifi_unload_driver();
+                return -1;
+            }
+        }
+        usleep(200000);
+    }
+    property_set(DRIVER_PROP_NAME, "timeout");
+    wifi_unload_driver();
+    return -1;
+#else
+#ifdef WIFI_DRIVER_STATE_CTRL_PARAM
+    if (is_wifi_driver_loaded()) {
+        return 0;
+    }
+
+    if (wifi_change_driver_state(WIFI_DRIVER_STATE_ON) < 0)
+        return -1;
+#endif
+    property_set(DRIVER_PROP_NAME, "ok");
+    return 0;
+#endif
 
 
+// wifi_fst_load_driver()
+int wifi_fst_load_driver()
+{
+    if (!is_fst_enabled())
+        return 0;
 
+    if (is_fst_driver_loaded())
+        return 0;
+
+    if (insmod(WIFI_FST_DRIVER_MODULE_PATH, WIFI_FST_DRIVER_MODULE_ARG) < 0)
+        return -1;
+
+    property_set(FST_DRIVER_PROP_NAME, "ok");
+
+    return 0;
+}
+```
+
+3. wifi_start_supplicant
+property_set("ctl.start",
